@@ -22,7 +22,7 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v6.16.0
         with:
           push: true
           tags: kalpeshpatelce/demo-app:${{ github.run_number }}
