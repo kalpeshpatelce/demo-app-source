@@ -4,7 +4,7 @@ const PORT = process.env.PORT || 3000;
 
 app.get('/', (req, res) => {
   res.json({
-    message: 'Hello from Jenkins + ArgoCD Pipeline! kalpesh patel',
+    message: 'Hello from Jenkins + ArgoCD Pipeline! kalpesh patel electromech',
     version: process.env.APP_VERSION || '1.0.0',
     environment: process.env.NODE_ENV || 'development',
     timestamp: new Date().toISOString()
