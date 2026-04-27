@@ -1,0 +1,44 @@
+# .github/workflows/ci.yaml
+# This file REPLACES Jenkins entirely
+
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main]        # triggers on git push to main
+                            # same as your Jenkins webhook
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest  # GitHub provides this server FREE
+                            # you don't need EC2 for CI
+
+    steps:
+      # Same as Jenkins "Checkout" stage
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Same as Jenkins "Build Docker Image" stage
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}  # stored in GitHub Secrets
+          password: ${{ secrets.DOCKERHUB_TOKEN }}     # not Jenkins Credentials
+
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        with:
+          push: true
+          tags: kalpeshpatelce/demo-app:${{ github.run_number }}
+
+      # Same as Jenkins "Update K8s Manifest" stage
+      - name: Update manifest
+        run: |
+          git clone https://${{ secrets.GH_TOKEN }}@github.com/\
+            kalpeshpatelce/demo-app-manifests.git
+          cd demo-app-manifests
+          yq eval '.spec.template.spec.containers[0].image =
+            "kalpeshpatelce/demo-app:${{ github.run_number }}"' \
+            -i deployment.yaml
+          git commit -am "ci: update image to ${{ github.run_number }}"
+          git push
