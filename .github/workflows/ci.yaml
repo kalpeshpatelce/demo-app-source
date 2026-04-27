@@ -1,0 +1,41 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4.3.0
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3.5.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6.17.0
+        with:
+          context: .
+          push: true
+          tags: kalpeshpatelce/demo-app:${{ github.run_number }}
+
+      - name: Update K8s manifest
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          git clone https://kalpeshpatelce:${GH_TOKEN}@github.com/kalpeshpatelce/demo-app-manifests.git
+          cd demo-app-manifests
+          yq eval '.spec.template.spec.containers[0].image = "kalpeshpatelce/demo-app:${{ github.run_number }}"' -i deployment.yaml
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          git add deployment.yaml
+          git commit -m "ci: update image to ${{ github.run_number }}"
+          git push https://kalpeshpatelce:${GH_TOKEN}@github.com/kalpeshpatelce/demo-app-manifests.git main
