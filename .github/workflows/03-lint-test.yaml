@@ -1,0 +1,46 @@
+name: 03 - Lint and Test
+
+on:
+  push:
+    branches: ['**']           # runs on ALL branches
+
+jobs:
+  lint-and-test:
+    name: Lint + Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Setup Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Check package.json is valid
+        run: node -e "require('./package.json'); console.log('package.json valid')"
+
+      - name: Check app.js syntax
+        run: node --check app.js && echo "Syntax OK"
+
+      - name: Run tests
+        run: npm test
+
+      - name: Check required files exist
+        run: |
+          FILES=("app.js" "package.json" "Dockerfile")
+          for f in "${FILES[@]}"; do
+            [ -f "$f" ] && echo "$f exists" || (echo "MISSING: $f" && exit 1)
+          done
+
+      - name: Validate Dockerfile
+        run: |
+          grep "FROM node:" Dockerfile || (echo "Invalid base image" && exit 1)
+          grep "EXPOSE" Dockerfile || (echo "EXPOSE missing" && exit 1)
+          grep "CMD" Dockerfile || (echo "CMD missing" && exit 1)
+          echo "Dockerfile looks good"
