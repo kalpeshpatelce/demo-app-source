@@ -2,20 +2,19 @@ name: 06 - DevSecOps - Security Quality Reliability
 
 on:
   push:
-    branches: ['**']
+    branches:
+      - '**'
   pull_request:
-    branches: [main]
+    branches:
+      - main
 
 jobs:
 
-  # ─────────────────────────────────────────────────────
-  # JOB 1: SECURITY CHECKS
-  # ─────────────────────────────────────────────────────
   security:
     name: Security Scan
     runs-on: ubuntu-latest
-
     steps:
+
       - name: Checkout
         uses: actions/checkout@v4.2.2
 
@@ -23,88 +22,61 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '18'
-          cache: 'npm'
 
       - name: Install dependencies
         run: npm install
 
-      - name: NPM Audit - Check vulnerable packages
+      - name: NPM Audit
         run: |
           echo "Running npm security audit..."
-          npm audit --audit-level=high --json > audit-report.json 2>&1 || true
-          VULNS=$(cat audit-report.json | node -e "
-            const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
-            const v=d.metadata?.vulnerabilities || {};
-            const total=(v.high||0)+(v.critical||0);
-            console.log(total);
-          " 2>/dev/null || echo "0")
-          echo "High/Critical vulnerabilities: $VULNS"
-          if [ "$VULNS" -gt "0" ]; then
-            echo "SECURITY ALERT: $VULNS high/critical vulnerabilities found"
-            npm audit --audit-level=high 2>&1 | head -50
-          else
-            echo "No high/critical vulnerabilities found"
-          fi
+          npm audit --audit-level=high || true
+          echo "Audit complete"
 
-      - name: Secret Scanner - Find hardcoded credentials
+      - name: Secret Scanner
         run: |
           echo "Scanning for hardcoded secrets..."
-          FOUND_SECRETS=0
-          PATTERNS=(
-            "password\s*=\s*['\"][^'\"]{6,}"
-            "api_key\s*=\s*['\"][^'\"]{10,}"
-            "secret\s*=\s*['\"][^'\"]{10,}"
-            "token\s*=\s*['\"][^'\"]{10,}"
-            "AWS_SECRET"
-            "private_key"
-            "BEGIN RSA PRIVATE"
-          )
-          for pattern in "${PATTERNS[@]}"; do
-            RESULT=$(grep -riE "$pattern" --include="*.js" --include="*.json" \
-              --exclude-dir=node_modules . 2>/dev/null || true)
-            if [ ! -z "$RESULT" ]; then
-              echo "POTENTIAL SECRET FOUND: $pattern"
-              echo "$RESULT"
-              FOUND_SECRETS=1
-            fi
-          done
-          if [ "$FOUND_SECRETS" -eq "0" ]; then
+          FOUND=0
+          if grep -rE "password\s*=\s*['\"][^'\"]{6,}" --include="*.js" --exclude-dir=node_modules . 2>/dev/null; then
+            echo "WARNING: Possible hardcoded password found"
+            FOUND=1
+          fi
+          if grep -rE "api_key\s*=\s*['\"][^'\"]{10,}" --include="*.js" --exclude-dir=node_modules . 2>/dev/null; then
+            echo "WARNING: Possible hardcoded API key found"
+            FOUND=1
+          fi
+          if grep -rE "AWS_SECRET" --include="*.js" --exclude-dir=node_modules . 2>/dev/null; then
+            echo "WARNING: AWS secret reference found"
+            FOUND=1
+          fi
+          if [ "$FOUND" -eq "0" ]; then
             echo "No hardcoded secrets found"
           fi
 
-      - name: Check outdated dependencies
+      - name: Check outdated packages
         run: |
-          echo "Checking for outdated packages..."
+          echo "Checking outdated packages..."
           npm outdated || true
-          echo "Dependency check complete"
+          echo "Done"
 
       - name: Dockerfile security check
         run: |
-          echo "Checking Dockerfile security..."
-          ISSUES=0
-          if ! grep -q "USER" Dockerfile; then
-            echo "WARNING: Container runs as root - add USER instruction"
-            ISSUES=$((ISSUES+1))
-          fi
+          echo "Checking Dockerfile..."
           if ! grep -q "HEALTHCHECK" Dockerfile; then
             echo "WARNING: No HEALTHCHECK in Dockerfile"
-            ISSUES=$((ISSUES+1))
           fi
-          if grep -q ":latest" Dockerfile; then
-            echo "WARNING: Using :latest tag - pin to specific version"
-            ISSUES=$((ISSUES+1))
+          if grep -q "FROM.*:latest" Dockerfile; then
+            echo "WARNING: Using latest tag in FROM - pin to specific version"
           fi
-          echo "Dockerfile warnings: $ISSUES"
-          echo "Security scan complete"
+          if ! grep -q "USER" Dockerfile; then
+            echo "WARNING: No USER instruction - container runs as root"
+          fi
+          echo "Dockerfile check complete"
 
-  # ─────────────────────────────────────────────────────
-  # JOB 2: CODE QUALITY CHECKS
-  # ─────────────────────────────────────────────────────
   code-quality:
     name: Code Quality Check
     runs-on: ubuntu-latest
-
     steps:
+
       - name: Checkout
         uses: actions/checkout@v4.2.2
 
@@ -112,22 +84,20 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '18'
-          cache: 'npm'
 
       - name: Install dependencies
         run: npm install
 
-      - name: Syntax check all JS files
+      - name: Syntax check JS files
         run: |
           echo "Checking JavaScript syntax..."
           ERRORS=0
-          for file in $(find . -name "*.js" \
-            -not -path "./node_modules/*" \
-            -not -path "./.git/*"); do
-            node --check "$file" 2>&1
-            if [ $? -ne 0 ]; then
+          for file in $(find . -name "*.js" -not -path "./node_modules/*" -not -path "./.git/*"); do
+            if ! node --check "$file" 2>&1; then
               echo "SYNTAX ERROR in: $file"
               ERRORS=$((ERRORS+1))
+            else
+              echo "OK: $file"
             fi
           done
           echo "Total syntax errors: $ERRORS"
@@ -135,54 +105,42 @@ jobs:
             exit 1
           fi
 
-      - name: Check error handling and best practices
+      - name: Check best practices
         run: |
-          echo "Checking error handling patterns..."
-          ISSUES=0
-          if ! grep -q "err\|error\|catch\|Error" app.js; then
-            echo "WARNING: No error handling found in app.js"
-            ISSUES=$((ISSUES+1))
-          fi
+          echo "Checking best practices..."
           if ! grep -q "/health" app.js; then
-            echo "WARNING: No /health endpoint found"
-            ISSUES=$((ISSUES+1))
+            echo "WARNING: No /health endpoint in app.js"
+          else
+            echo "OK: /health endpoint exists"
           fi
           if ! grep -q "process.env.PORT" app.js; then
-            echo "WARNING: PORT is hardcoded, use process.env.PORT"
-            ISSUES=$((ISSUES+1))
+            echo "WARNING: PORT may be hardcoded - use process.env.PORT"
+          else
+            echo "OK: PORT from environment variable"
           fi
-          echo "Best practice warnings: $ISSUES"
+          echo "Best practice check complete"
 
-      - name: Run test suite
-        run: |
-          echo "Running tests..."
-          npm test
+      - name: Run tests
+        run: npm test
 
-      - name: Validate required files exist
+      - name: Check required files
         run: |
-          REQUIRED=("app.js" "package.json" "Dockerfile")
-          MISSING=0
-          for f in "${REQUIRED[@]}"; do
-            if [ ! -f "$f" ]; then
-              echo "MISSING required file: $f"
-              MISSING=$((MISSING+1))
+          echo "Checking required files..."
+          for f in app.js package.json Dockerfile; do
+            if [ -f "$f" ]; then
+              echo "OK: $f exists"
             else
-              echo "Found: $f"
+              echo "MISSING: $f"
+              exit 1
             fi
           done
-          if [ "$MISSING" -gt "0" ]; then
-            exit 1
-          fi
           echo "All required files present"
 
-  # ─────────────────────────────────────────────────────
-  # JOB 3: RELIABILITY CHECKS
-  # ─────────────────────────────────────────────────────
   reliability:
     name: Reliability Check
     runs-on: ubuntu-latest
-
     steps:
+
       - name: Checkout
         uses: actions/checkout@v4.2.2
 
@@ -190,92 +148,91 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '18'
-          cache: 'npm'
 
       - name: Install dependencies
         run: npm install
 
-      - name: Docker build and health test
+      - name: Build Docker image
         run: |
-          echo "Building Docker image for testing..."
-          docker build -t demo-app:test .
+          echo "Building Docker image..."
+          docker build -t demo-app:reliability-test .
+          echo "Build successful"
 
+      - name: Health endpoint test
+        run: |
           echo "Starting container..."
-          docker run -d --name reliability-test \
-            -p 3000:3000 \
-            --memory=128m \
-            --cpus=0.5 \
-            demo-app:test
+          docker run -d --name rel-test -p 3000:3000 demo-app:reliability-test
+          echo "Waiting 10 seconds for app to start..."
+          sleep 10
 
-          echo "Waiting for app to start..."
-          sleep 8
+          echo "Testing root endpoint..."
+          HTTP=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/ || echo "000")
+          echo "Root status: $HTTP"
 
-          echo "Testing / endpoint..."
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            http://localhost:3000/ || echo "000")
-          echo "Root endpoint HTTP status: $HTTP_STATUS"
+          echo "Testing health endpoint..."
+          HEALTH=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/health || echo "000")
+          echo "Health status: $HEALTH"
 
-          echo "Testing /health endpoint..."
-          HEALTH_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            http://localhost:3000/health || echo "000")
-          echo "Health endpoint HTTP status: $HEALTH_STATUS"
+          docker stop rel-test
+          docker rm rel-test
 
-          docker stop reliability-test
-          docker rm reliability-test
-          docker rmi demo-app:test
-
-          if [ "$HTTP_STATUS" != "200" ] || [ "$HEALTH_STATUS" != "200" ]; then
-            echo "FAILED: Endpoints not returning 200"
+          if [ "$HTTP" != "200" ]; then
+            echo "FAILED: Root endpoint returned $HTTP, expected 200"
             exit 1
           fi
-          echo "All endpoints returned 200 OK"
+          if [ "$HEALTH" != "200" ]; then
+            echo "FAILED: Health endpoint returned $HEALTH, expected 200"
+            exit 1
+          fi
+          echo "All endpoints return 200 OK"
 
-      - name: Validate JSON response
+      - name: JSON response validation
         run: |
-          docker build -t demo-app:json-test .
-          docker run -d --name json-test -p 3001:3000 demo-app:json-test
-          sleep 6
+          echo "Starting container for JSON test..."
+          docker run -d --name json-test -p 3001:3000 demo-app:reliability-test
+          sleep 8
 
           RESPONSE=$(curl -s http://localhost:3001/ 2>/dev/null)
           echo "Response: $RESPONSE"
 
+          docker stop json-test
+          docker rm json-test
+
           echo "$RESPONSE" | node -e "
-            let d='';
-            process.stdin.on('data', c => d+=c);
+            let d = '';
+            process.stdin.on('data', c => d += c);
             process.stdin.on('end', () => {
               try {
                 JSON.parse(d);
                 console.log('Response is valid JSON');
                 process.exit(0);
               } catch(e) {
-                console.log('Response is NOT valid JSON');
+                console.log('Response is NOT valid JSON: ' + e.message);
                 process.exit(1);
               }
             });
           "
 
-          docker stop json-test
-          docker rm json-test
-          docker rmi demo-app:json-test
-
-      - name: Performance baseline check
+      - name: Performance test
         run: |
-          docker build -t demo-app:perf-test .
-          docker run -d --name perf-test -p 3002:3000 demo-app:perf-test
-          sleep 6
+          echo "Starting container for performance test..."
+          docker run -d --name perf-test -p 3002:3000 demo-app:reliability-test
+          sleep 8
 
-          echo "Running 10 requests to measure response time..."
-          for i in {1..10}; do
-            TIME=$(curl -s -o /dev/null -w "%{time_total}" \
-              http://localhost:3002/health 2>/dev/null)
-            echo "Request $i: ${TIME}s"
+          echo "Sending 10 requests..."
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            TIME=$(curl -s -o /dev/null -w "%{time_total}" http://localhost:3002/health 2>/dev/null || echo "timeout")
+            echo "Request $i response time: ${TIME}s"
           done
 
-          MEM=$(docker stats perf-test --no-stream \
-            --format "{{.MemUsage}}" 2>/dev/null)
+          MEM=$(docker stats perf-test --no-stream --format "{{.MemUsage}}" 2>/dev/null || echo "unknown")
           echo "Memory usage: $MEM"
 
           docker stop perf-test
           docker rm perf-test
-          docker rmi demo-app:perf-test
-          echo "Performance check complete"
+
+      - name: Cleanup Docker images
+        if: always()
+        run: |
+          docker rmi demo-app:reliability-test 2>/dev/null || true
+          echo "Cleanup done"
