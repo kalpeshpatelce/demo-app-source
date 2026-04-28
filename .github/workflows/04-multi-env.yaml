@@ -1,0 +1,88 @@
+name: 04 - Multi Environment Deploy
+
+on:
+  push:
+    branches:
+      - main     # triggers prod deploy
+      - dev      # triggers dev deploy
+
+env:
+ # FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  IMAGE: kalpeshpatelce/demo-app
+
+jobs:
+  set-environment:
+    name: Determine Environment
+    runs-on: ubuntu-latest
+    outputs:
+      env_name: ${{ steps.set-env.outputs.env_name }}
+      namespace: ${{ steps.set-env.outputs.namespace }}
+    steps:
+      - name: Set environment based on branch
+        id: set-env
+        run: |
+          if [ "${{ github.ref_name }}" == "main" ]; then
+            echo "env_name=prod" >> $GITHUB_OUTPUT
+            echo "namespace=prod" >> $GITHUB_OUTPUT
+          else
+            echo "env_name=dev" >> $GITHUB_OUTPUT
+            echo "namespace=dev" >> $GITHUB_OUTPUT
+          fi
+
+  build-and-deploy:
+    name: Build and Deploy to ${{ needs.set-environment.outputs.env_name }}
+    runs-on: ubuntu-latest
+    needs: set-environment
+    environment: ${{ needs.set-environment.outputs.env_name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3.4.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6.16.0
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ needs.set-environment.outputs.env_name }}-${{ github.run_number }}
+            ${{ env.IMAGE }}:${{ needs.set-environment.outputs.env_name }}-latest
+
+      - name: Update manifest for environment
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          ENV_NAME: ${{ needs.set-environment.outputs.env_name }}
+          NAMESPACE: ${{ needs.set-environment.outputs.namespace }}
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          git clone https://kalpeshpatelce:${GH_TOKEN}@github.com/kalpeshpatelce/demo-app-manifests.git
+          cd demo-app-manifests
+
+          # Update the correct environment file
+          MANIFEST="overlays/${ENV_NAME}/deployment.yaml"
+          if [ ! -f "$MANIFEST" ]; then
+            mkdir -p "overlays/${ENV_NAME}"
+            cp deployment.yaml "$MANIFEST"
+          fi
+
+          yq eval ".spec.template.spec.containers[0].image = \"${{ env.IMAGE }}:${ENV_NAME}-${{ github.run_number }}\"" \
+            -i "$MANIFEST"
+
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          git add .
+          git commit -m "ci: deploy ${ENV_NAME} image ${{ github.run_number }}"
+          git push https://kalpeshpatelce:${GH_TOKEN}@github.com/kalpeshpatelce/demo-app-manifests.git main
+
+      - name: Summary
+        run: |
+          echo "## ${{ needs.set-environment.outputs.env_name }} Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "- Environment: \`${{ needs.set-environment.outputs.env_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Image: \`${{ env.IMAGE }}:${{ needs.set-environment.outputs.env_name }}-${{ github.run_number }}\`" >> $GITHUB_STEP_SUMMARY
