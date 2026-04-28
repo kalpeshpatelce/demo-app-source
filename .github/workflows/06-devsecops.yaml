@@ -65,7 +65,7 @@ jobs:
             echo "WARNING: No HEALTHCHECK in Dockerfile"
           fi
           if grep -q "FROM.*:latest" Dockerfile; then
-            echo "WARNING: Using latest tag in FROM - pin to specific version"
+            echo "WARNING: Using latest tag in FROM"
           fi
           if ! grep -q "USER" Dockerfile; then
             echo "WARNING: No USER instruction - container runs as root"
@@ -114,7 +114,7 @@ jobs:
             echo "OK: /health endpoint exists"
           fi
           if ! grep -q "process.env.PORT" app.js; then
-            echo "WARNING: PORT may be hardcoded - use process.env.PORT"
+            echo "WARNING: PORT may be hardcoded"
           else
             echo "OK: PORT from environment variable"
           fi
@@ -162,15 +162,30 @@ jobs:
         run: |
           echo "Starting container..."
           docker run -d --name rel-test -p 3000:3000 demo-app:reliability-test
-          echo "Waiting 10 seconds for app to start..."
-          sleep 10
+
+          echo "Waiting for app to be ready..."
+          RETRIES=0
+          MAX=20
+          until curl -sf http://localhost:3000/health > /dev/null 2>&1; do
+            RETRIES=$((RETRIES+1))
+            if [ "$RETRIES" -ge "$MAX" ]; then
+              echo "FAILED: App did not start after ${MAX} retries"
+              docker logs rel-test
+              docker stop rel-test
+              docker rm rel-test
+              exit 1
+            fi
+            echo "Waiting... attempt $RETRIES/$MAX"
+            sleep 2
+          done
+          echo "App is ready after $RETRIES retries"
 
           echo "Testing root endpoint..."
-          HTTP=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/ || echo "000")
+          HTTP=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/)
           echo "Root status: $HTTP"
 
           echo "Testing health endpoint..."
-          HEALTH=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/health || echo "000")
+          HEALTH=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/health)
           echo "Health status: $HEALTH"
 
           docker stop rel-test
@@ -190,9 +205,25 @@ jobs:
         run: |
           echo "Starting container for JSON test..."
           docker run -d --name json-test -p 3001:3000 demo-app:reliability-test
-          sleep 8
 
-          RESPONSE=$(curl -s http://localhost:3001/ 2>/dev/null)
+          echo "Waiting for app to be ready..."
+          RETRIES=0
+          MAX=20
+          until curl -sf http://localhost:3001/health > /dev/null 2>&1; do
+            RETRIES=$((RETRIES+1))
+            if [ "$RETRIES" -ge "$MAX" ]; then
+              echo "FAILED: App did not start"
+              docker logs json-test
+              docker stop json-test
+              docker rm json-test
+              exit 1
+            fi
+            echo "Waiting... attempt $RETRIES/$MAX"
+            sleep 2
+          done
+          echo "App ready after $RETRIES retries"
+
+          RESPONSE=$(curl -s http://localhost:3001/)
           echo "Response: $RESPONSE"
 
           docker stop json-test
@@ -203,11 +234,13 @@ jobs:
             process.stdin.on('data', c => d += c);
             process.stdin.on('end', () => {
               try {
-                JSON.parse(d);
+                const parsed = JSON.parse(d);
                 console.log('Response is valid JSON');
+                console.log('Keys found: ' + Object.keys(parsed).join(', '));
                 process.exit(0);
               } catch(e) {
-                console.log('Response is NOT valid JSON: ' + e.message);
+                console.log('Response is NOT valid JSON');
+                console.log('Got: ' + d.substring(0, 100));
                 process.exit(1);
               }
             });
@@ -217,12 +250,25 @@ jobs:
         run: |
           echo "Starting container for performance test..."
           docker run -d --name perf-test -p 3002:3000 demo-app:reliability-test
-          sleep 8
+
+          echo "Waiting for app to be ready..."
+          RETRIES=0
+          MAX=20
+          until curl -sf http://localhost:3002/health > /dev/null 2>&1; do
+            RETRIES=$((RETRIES+1))
+            if [ "$RETRIES" -ge "$MAX" ]; then
+              echo "FAILED: App did not start"
+              docker stop perf-test
+              docker rm perf-test
+              exit 1
+            fi
+            sleep 2
+          done
 
           echo "Sending 10 requests..."
           for i in 1 2 3 4 5 6 7 8 9 10; do
-            TIME=$(curl -s -o /dev/null -w "%{time_total}" http://localhost:3002/health 2>/dev/null || echo "timeout")
-            echo "Request $i response time: ${TIME}s"
+            TIME=$(curl -s -o /dev/null -w "%{time_total}" http://localhost:3002/health || echo "timeout")
+            echo "Request $i: ${TIME}s"
           done
 
           MEM=$(docker stats perf-test --no-stream --format "{{.MemUsage}}" 2>/dev/null || echo "unknown")
@@ -230,9 +276,12 @@ jobs:
 
           docker stop perf-test
           docker rm perf-test
+          echo "Performance check complete"
 
-      - name: Cleanup Docker images
+      - name: Cleanup
         if: always()
         run: |
+          docker stop rel-test json-test perf-test 2>/dev/null || true
+          docker rm rel-test json-test perf-test 2>/dev/null || true
           docker rmi demo-app:reliability-test 2>/dev/null || true
           echo "Cleanup done"
