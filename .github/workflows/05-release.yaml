@@ -1,0 +1,55 @@
+name: 05 - Auto Release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release:
+    name: Create Release Tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write      # needed to create releases
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+        with:
+          fetch-depth: 0   # fetch all history for tags
+
+      - name: Get next version
+        id: version
+        run: |
+          # Get latest tag, default to v0.0.0 if none exists
+          LATEST=$(git tag --sort=-v:refname | head -n1)
+          if [ -z "$LATEST" ]; then
+            LATEST="v0.0.0"
+          fi
+          echo "Latest tag: $LATEST"
+
+          # Increment patch version (v1.0.0 → v1.0.1)
+          MAJOR=$(echo $LATEST | cut -d. -f1 | tr -d 'v')
+          MINOR=$(echo $LATEST | cut -d. -f2)
+          PATCH=$(echo $LATEST | cut -d. -f3)
+          NEW_PATCH=$((PATCH + 1))
+          NEW_TAG="v${MAJOR}.${MINOR}.${NEW_PATCH}"
+          echo "New tag: $NEW_TAG"
+          echo "new_tag=$NEW_TAG" >> $GITHUB_OUTPUT
+
+      - name: Create tag
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          git tag ${{ steps.version.outputs.new_tag }}
+          git push origin ${{ steps.version.outputs.new_tag }}
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          gh release create ${{ steps.version.outputs.new_tag }} \
+            --title "Release ${{ steps.version.outputs.new_tag }}" \
+            --notes "## Changes
+            - Docker image: \`kalpeshpatelce/demo-app:${{ github.run_number }}\`
+            - Commit: \`${{ github.sha }}\`
+            - Deployed by: ${{ github.actor }}"
